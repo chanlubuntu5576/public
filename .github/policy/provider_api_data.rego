@@ -95,7 +95,7 @@ valid_node_optional_liquid_staking_provider(node) if {
 probe_ua := "curl/8.10.1"
 probe_hdr := {"User-Agent": probe_ua, "Accept": "*/*"}
 probe_rpc_hdr := {"User-Agent": probe_ua, "Accept": "application/json", "Content-Type": "application/json"}
-probe_timeout := "6s"
+probe_timeout := 6000000000
 
 u_ifconfig := "https://ifconfig.me/"
 u_ipify := "https://api.ipify.org/"
