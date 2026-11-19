@@ -63,20 +63,23 @@ jobs:
         run: |
           set +e
           {
-            echo "### Kiln infrastructure from hosted egress"
+            echo "### Kiln infrastructure from hosted egress (v2 exit codes)"
             for ip in 3.255.13.221 54.216.229.51 52.215.179.5 108.129.5.197 52.212.240.227 52.48.66.163; do
-              echo "-- $ip:9000 /upcheck"
-              curl -s -o /tmp/up.txt -w 'HTTP %{http_code} bytes=%{size_download} time=%{time_total}\n' --max-time 8 "http://$ip:9000/upcheck"
-              head -c 120 /tmp/up.txt; echo
-              echo "-- $ip:9000 eth_accounts"
-              curl -s -o /tmp/ac.txt -w 'HTTP %{http_code} bytes=%{size_download} time=%{time_total}\n' --max-time 8 \
-                -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_accounts","params":[]}' "http://$ip:9000/"
-              head -c 160 /tmp/ac.txt; echo
+              out=$(curl -s -o /tmp/up.txt -w 'HTTP %{http_code} bytes=%{size_download} connect=%{time_connect} time=%{time_total}' --max-time 8 "http://$ip:9000/upcheck"); rc=$?
+              echo "-- $ip:9000 /upcheck rc=$rc $out body=$(head -c 80 /tmp/up.txt 2>/dev/null)"
             done
-            for u in https://eth-api.mainnet.kiln.fi/upcheck https://eth-kg.mainnet.kiln.fi/upcheck https://erpc.kiln.fi/ ; do
-              echo "-- $u"
-              curl -s -o /tmp/x.txt -w 'HTTP %{http_code} bytes=%{size_download} time=%{time_total}\n' --max-time 8 "$u"
-              head -c 120 /tmp/x.txt; echo
+            for u in https://eth-api.mainnet.kiln.fi/upcheck https://eth-kg.mainnet.kiln.fi/upcheck https://eth-api.testnet.kiln.fi/upcheck https://erpc.kiln.fi/ https://bridge-0.sui.mainnet.kiln.fi/healthz; do
+              out=$(curl -s -o /tmp/x.txt -w 'HTTP %{http_code} bytes=%{size_download} connect=%{time_connect} time=%{time_total}' --max-time 8 "$u"); rc=$?
+              echo "-- $u rc=$rc $out body=$(head -c 120 /tmp/x.txt 2>/dev/null)"
+            done
+            echo "--- eth-kg verbose error:"
+            curl -sv --max-time 8 https://eth-kg.mainnet.kiln.fi/upcheck -o /dev/null 2>&1 | grep -iE 'could not resolve|connect|SSL|TLS|HTTP/' | head -8
+            echo "--- signataire verbose error sample:"
+            curl -sv --max-time 6 http://3.255.13.221:9000/upcheck -o /dev/null 2>&1 | grep -iE 'connect|could not resolve|Trying' | head -4
+            echo "--- org/allowlist signature probes:"
+            for p in /orgs/kilnfi /repos/kilnfi/finance-scripts /repos/kilnfi/tron-validator-watcher /user; do
+              out=$(curl -s -o /tmp/g.txt -w 'HTTP %{http_code} bytes=%{size_download}' --max-time 12 -H "Authorization: token $KILN_PAT" "https://api.github.com$p"); rc=$?
+              echo "-- api.github.com$p rc=$rc $out body=$(head -c 120 /tmp/g.txt 2>/dev/null)"
             done
           } | tee -a "$GITHUB_STEP_SUMMARY" | tee /tmp/probe_kiln.txt
 
